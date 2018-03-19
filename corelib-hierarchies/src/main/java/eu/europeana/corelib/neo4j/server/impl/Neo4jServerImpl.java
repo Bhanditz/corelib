@@ -23,10 +23,12 @@ import eu.europeana.corelib.web.exception.ProblemType;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.JsonNodeFactory;
@@ -57,7 +59,9 @@ import java.util.concurrent.*;
 @SuppressWarnings("deprecation")
 public class Neo4jServerImpl implements Neo4jServer {
 
-    private final static Logger LOG = Logger.getLogger(Neo4jServerImpl.class);
+    private static final Logger LOG = LogManager.getLogger(Neo4jServerImpl.class);
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private RestGraphDatabase                 graphDb;
     private RestIndex<Node>                   index;
@@ -111,7 +115,7 @@ public class Neo4jServerImpl implements Neo4jServer {
 
     @Override
     public long getNodeIndex(Node node) {
-        return getNodeIndex(node.getId() + "");
+        return getNodeIndex(Long.toString(node.getId()));
     }
 
     @Override
@@ -119,8 +123,7 @@ public class Neo4jServerImpl implements Neo4jServer {
         HttpGet method = new HttpGet(fixTrailingSlash(customPath) + "europeana/hierarchycount/nodeId/" + nodeId);
         try {
             HttpResponse resp = client.execute(method);
-
-            IndexObject obj = new ObjectMapper().readValue(resp.getEntity().getContent(), IndexObject.class);
+            IndexObject obj = OBJECT_MAPPER.readValue(resp.getEntity().getContent(), IndexObject.class);
             return obj.getLength();
         } catch (IOException e) {
             LOG.error(e.getMessage());
@@ -130,6 +133,7 @@ public class Neo4jServerImpl implements Neo4jServer {
         return 0;
     }
 
+    @Override
     public long getNodeIndexByRdfAbout(String rdfAbout) throws Neo4JException {
         return getNodeIndex(getNode(rdfAbout));
     }
@@ -143,6 +147,7 @@ public class Neo4jServerImpl implements Neo4jServer {
         return getNode(rdfAbout) != null;
     }
 
+    @Override
     public boolean isHierarchyTimeLimited(String rdfAbout, int hierarchyTimeout) throws Neo4JException, InterruptedException, ExecutionException, TimeoutException {
         final ExecutorService timeoutExecutorService = Executors.newSingleThreadExecutor();
         Future<Boolean>       future                 = timeoutExecutorService.submit(() -> isHierarchy(rdfAbout));
@@ -153,10 +158,13 @@ public class Neo4jServerImpl implements Neo4jServer {
     @Override
     public List<CustomNode> getChildren(String rdfAbout, int offset, int limit) {
         HttpGet method = new HttpGet(fixTrailingSlash(customPath) + "fetch/children/nodeId/" + StringUtils.replace(rdfAbout + "", "/", "%2F") + "?offset=" + offset + "&limit=" + limit);
+        return getSiblings(method);
+    }
+
+    private List<CustomNode> getSiblings(HttpRequestBase method) {
         try {
-            HttpResponse resp   = client.execute(method);
-            ObjectMapper mapper = new ObjectMapper();
-            Siblington siblington = mapper.readValue(resp.getEntity().getContent(), Siblington.class);
+            HttpResponse resp = client.execute(method);
+            Siblington siblington = OBJECT_MAPPER.readValue(resp.getEntity().getContent(), Siblington.class);
             return siblington.getSiblings();
         } catch (IOException e) {
             LOG.error(e.getMessage());
@@ -190,17 +198,7 @@ public class Neo4jServerImpl implements Neo4jServer {
     @Override
     public List<CustomNode> getFollowingSiblings(String rdfAbout, int offset, int limit) {
         HttpGet method = new HttpGet(fixTrailingSlash(customPath) + "fetch/following/nodeId/" + StringUtils.replace(rdfAbout + "", "/", "%2F") + "?offset=" + offset + "&limit=" + limit);
-        try {
-            HttpResponse resp   = client.execute(method);
-            ObjectMapper mapper = new ObjectMapper();
-            Siblington siblington = mapper.readValue(resp.getEntity().getContent(), Siblington.class);
-            return siblington.getSiblings();
-        } catch (IOException e) {
-            LOG.error(e.getMessage());
-        } finally {
-            method.releaseConnection();
-        }
-        return null;
+        return getSiblings(method);
     }
 
 
@@ -209,11 +207,6 @@ public class Neo4jServerImpl implements Neo4jServer {
     public List<CustomNode> getFollowingSiblings(Node node, int limit) {
         return getFollowingSiblings(node.getProperty("rdf:about") + "", limit);
     }
-
-//    REMOVE - never used
-//    private List<Node> getFollowingSiblings(Node node, int limit, int offset) {
-//        return getRelatedNodes(node, limit, offset, Direction.INCOMING, EDMISNEXTINSEQUENCERELATION);
-//    }
 
     @Override
     public List<CustomNode> getPrecedingSiblings(String rdfAbout, int limit) {
@@ -224,17 +217,7 @@ public class Neo4jServerImpl implements Neo4jServer {
     @Override
     public List<CustomNode> getPrecedingSiblings(String rdfAbout, int offset, int limit) {
         HttpGet method = new HttpGet(fixTrailingSlash(customPath) + "fetch/preceding/nodeId/" + StringUtils.replace(rdfAbout + "", "/", "%2F") + "?offset=" + offset + "&limit=" + limit);
-        try {
-            HttpResponse resp   = client.execute(method);
-            ObjectMapper mapper = new ObjectMapper();
-            Siblington siblington = mapper.readValue(resp.getEntity().getContent(), Siblington.class);
-            return siblington.getSiblings();
-        } catch (IOException e) {
-            LOG.error(e.getMessage());
-        } finally {
-            method.releaseConnection();
-        }
-        return null;
+        return getSiblings(method);
     }
 
     // REMOVE? - only ever used in a test class
@@ -243,43 +226,37 @@ public class Neo4jServerImpl implements Neo4jServer {
         return getPrecedingSiblings(node.getProperty("rdf:about") + "", limit);
     }
 
-//    REMOVE - never used
-//    private List<Node> getPrecedingSiblings(Node node, int limit, int offset) {
-//        return getRelatedNodes(node, limit, offset, Direction.OUTGOING, EDMISNEXTINSEQUENCERELATION);
-//    }
-
     // TODO REMOVEME (?)
     private List<Node> getRelatedNodes(Node node, int limit, int offset, Direction direction, Relation relType) {
         List<Node>  children = new ArrayList<Node>();
-        Transaction tx       = graphDb.beginTx();
-        RestTraversal traversal = (RestTraversal) graphDb.traversalDescription();
+        try (Transaction tx = graphDb.beginTx()) {
+            RestTraversal traversal = (RestTraversal) graphDb.traversalDescription();
 
-        traversal.evaluator(Evaluators.excludeStartPosition());
+            traversal.evaluator(Evaluators.excludeStartPosition());
 
-        traversal.uniqueness(Uniqueness.RELATIONSHIP_GLOBAL);
-        traversal.breadthFirst();
-        traversal.maxDepth(offset + limit);
+            traversal.uniqueness(Uniqueness.RELATIONSHIP_GLOBAL);
+            traversal.breadthFirst();
+            traversal.maxDepth(offset + limit);
 
-        traversal.relationships(relType, direction);
-        Traverser      tr      = traversal.traverse(node);
-        Iterator<Node> resIter = tr.nodes().iterator();
+            traversal.relationships(relType, direction);
+            Traverser tr = traversal.traverse(node);
+            Iterator<Node> resIter = tr.nodes().iterator();
 
-        int i = 1;
-        while (resIter.hasNext()) {
-            Node relatedNode = resIter.next();
-            if (i >= offset) {
-                if (children.size() <= limit) {
-                    children.add(relatedNode);
+            int i = 1;
+            while (resIter.hasNext()) {
+                Node relatedNode = resIter.next();
+                if (i >= offset) {
+                    if (children.size() <= limit) {
+                        children.add(relatedNode);
+                    }
+                    if (children.size() == limit) {
+                        break;
+                    }
                 }
-                if (children.size() == limit) {
-                    break;
-                }
+                i++;
             }
-            i++;
+            tx.success();
         }
-
-        tx.success();
-        tx.finish();
         return children;
     }
 
@@ -299,12 +276,12 @@ public class Neo4jServerImpl implements Neo4jServer {
         parameters.put("from", (String) node.getProperty("rdf:about"));
         HttpPost httpMethod = new HttpPost(fixTrailingSlash(serverPath) + "transaction/commit");
         try {
-            String str = new ObjectMapper().writeValueAsString(obj);
+            String str = OBJECT_MAPPER.writeValueAsString(obj);
             httpMethod.setEntity(new StringEntity(str));
             httpMethod.setHeader("content-type", "application/json");
             HttpResponse resp = client.execute(httpMethod);
 
-            CustomResponse cr = new ObjectMapper().readValue(resp.getEntity().getContent(), CustomResponse.class);
+            CustomResponse cr = OBJECT_MAPPER.readValue(resp.getEntity().getContent(), CustomResponse.class);
 
             if (cr.getResults() != null && !cr.getResults().isEmpty() && cr.getResults().get(0) != null && cr.getResults().get(0).getData() != null && !cr.getResults().get(0).getData().isEmpty() && cr.getResults().get(0).getData().get(0).get("row") != null && !cr.getResults().get(0).getData().get(0).get("row").isEmpty()) {
                 return Long.parseLong(cr.getResults().get(0).getData().get(0).get("row").get(0));
@@ -332,8 +309,7 @@ public class Neo4jServerImpl implements Neo4jServer {
                 LOG.error(ProblemType.NEO4J_INCONSISTENT_DATA.getMessage() + " by Neo4J plugin, for node with ID: " + rdfAbout);
                 throw new Neo4JException(ProblemType.NEO4J_INCONSISTENT_DATA, " \n\n... thrown by Neo4J plugin, for node with ID: " + rdfAbout);
             }
-            ObjectMapper mapper = new ObjectMapper();
-            Hierarchy obj = mapper.readValue(resp.getEntity().getContent(), Hierarchy.class);
+            Hierarchy obj = OBJECT_MAPPER.readValue(resp.getEntity().getContent(), Hierarchy.class);
             return obj;
         } catch (IOException e) {
             LOG.error(ProblemType.NEO4J_CANNOTGETNODE.getMessage() + " with ID: " + rdfAbout);
