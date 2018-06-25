@@ -20,8 +20,6 @@ package eu.europeana.corelib.db.service.abstracts;
 import java.io.Serializable;
 import java.util.List;
 
-import org.springframework.transaction.annotation.Transactional;
-
 import eu.europeana.corelib.db.dao.RelationalDao;
 import eu.europeana.corelib.db.exception.DatabaseException;
 import eu.europeana.corelib.definitions.db.entity.relational.abstracts.IdentifiedEntity;
@@ -31,13 +29,11 @@ import eu.europeana.corelib.definitions.db.entity.relational.abstracts.Identifie
  * 
  * @see eu.europeana.corelib.db.service.abstracts.AbstractService
  */
-@Transactional(readOnly = true)
 public abstract class AbstractServiceImpl<E extends IdentifiedEntity<?>> implements AbstractService<E> {
 
 	private RelationalDao<E> dao;
 
 	@Override
-	@Transactional(readOnly = false)
 	public E store(E entity) throws DatabaseException {
 		if (entity.getId() != null && findByID(entity.getId()) != null) {
 			return dao.update(entity);
@@ -46,7 +42,6 @@ public abstract class AbstractServiceImpl<E extends IdentifiedEntity<?>> impleme
 	}
 
 	@Override
-	@Transactional(readOnly = false)
 	public void remove(E entity) throws DatabaseException {
 		E persEnity = dao.findByPK(entity.getId());
 		dao.delete(persEnity);
