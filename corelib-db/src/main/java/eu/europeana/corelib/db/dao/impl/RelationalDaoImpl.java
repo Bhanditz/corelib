@@ -69,7 +69,12 @@ public class RelationalDaoImpl<E extends IdentifiedEntity<?>> implements Relatio
             return entityManager.find(clazz, id);
         } catch (IllegalArgumentException e) {
             throw new DatabaseException(e, ProblemType.INVALIDARGUMENTS);
+        } catch (PersistenceException e) {
+            // 2018-06-27 At the moment we regularly have connection resets in CF that can throw an error here which
+            // in turn leaves the connection thread to postgres hanging. To prevent that, we catch the error
+            LOG.error("Error retrieving key", e);
         }
+        return null;
     }
 
     @Override
